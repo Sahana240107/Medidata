@@ -1,7 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { createClient } from "@supabase/supabase-js";
 
 const API = process.env.NEXT_PUBLIC_API_URL;
+
+// Supabase client — used only for session refresh
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 export const useAuthStore = create(
   persist(
@@ -12,7 +19,6 @@ export const useAuthStore = create(
       error: null,
 
       setAuth: (token, user) => {
-        // Also set cookie so middleware can read it (JS-accessible cookie)
         if (typeof document !== "undefined") {
           document.cookie = `medidata_token=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
         }
@@ -24,6 +30,25 @@ export const useAuthStore = create(
           document.cookie = "medidata_token=; path=/; max-age=0";
         }
         set({ token: null, user: null, error: null });
+      },
+
+      /**
+       * Call once on app mount (e.g. in your root layout or an AuthProvider).
+       * Asks Supabase for a fresh access_token using the stored session.
+       * If the session is gone or expired, clears auth so the user hits the login page.
+       */
+      refreshSession: async () => {
+        try {
+          const { data, error } = await supabase.auth.getSession();
+          if (error || !data?.session) {
+            get().clearAuth();
+            return;
+          }
+          const { access_token, user } = data.session;
+          get().setAuth(access_token, user);
+        } catch {
+          get().clearAuth();
+        }
       },
 
       login: async (email, password) => {
@@ -66,7 +91,8 @@ export const useAuthStore = create(
         }
       },
 
-      logout: () => {
+      logout: async () => {
+        await supabase.auth.signOut();
         get().clearAuth();
       },
 

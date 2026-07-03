@@ -4,17 +4,24 @@ MediData FastAPI backend entry point.
 import os
 from dotenv import load_dotenv
 
+load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth
+from app.routers import auth, cases
+from app.db.qdrant_client import ensure_collection
 
-load_dotenv()
 app = FastAPI(
     title="MediData API",
     description="Privacy-preserving global medical discovery network.",
     version="0.1.0",
 )
+
+
+@app.on_event("startup")
+def on_startup():
+    # Make sure the Qdrant collection exists before any case gets created.
+    ensure_collection()
 
 # ─── CORS ────────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -30,6 +37,7 @@ app.add_middleware(
 
 # ─── Routers ─────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
+app.include_router(cases.router)
 
 
 @app.get("/health")
