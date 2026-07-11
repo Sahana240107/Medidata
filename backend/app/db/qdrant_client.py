@@ -91,15 +91,71 @@ def delete_fingerprint(fingerprint_id: str) -> None:
     )
 
 
-def search_similar(vector: list, limit: int = 10, query_filter: qmodels.Filter = None):
-    """Run a similarity search against the case fingerprint collection."""
+EXCLUDED_STATUSES = ["archived", "deleted"]
+
+
+def build_exclude_inactive_filter() -> qmodels.Filter:
+    """
+    Hard filter pushed down to Qdrant so archived/deleted cases never even
+    enter the recall set — cheaper than pulling them back and dropping them
+    in Python, and it means RECALL_LIMIT is spent entirely on live cases.
+    """
+    return qmodels.Filter(
+        must_not=[
+            qmodels.FieldCondition(
+                key="status",
+                match=qmodels.MatchAny(any=EXCLUDED_STATUSES),
+            )
+        ]
+    )
+
+
+def _merge_filters(*filters) -> qmodels.Filter:
+    """Combine several Filter objects (each already AND-ed internally) with AND."""
+    present = [f for f in filters if f is not None]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+
+    must = []
+    must_not = []
+    should = []
+    for f in present:
+        must.extend(f.must or [])
+        must_not.extend(f.must_not or [])
+        should.extend(f.should or [])
+    return qmodels.Filter(must=must or None, must_not=must_not or None, should=should or None)
+
+
+def search_similar(
+    vector: list,
+    limit: int = 10,
+    query_filter: qmodels.Filter = None,
+    score_threshold: float = None,
+    exclude_inactive: bool = True,
+):
+    """
+    Run a similarity search against the case fingerprint collection.
+
+    By default this excludes archived/deleted cases at the Qdrant level
+    (exclude_inactive=True) — pass an extra `query_filter` for anything else
+    the caller wants AND-ed in (e.g. hospital scoping, outcome match).
+    """
     settings = get_settings()
     client = get_qdrant_client()
+
+    effective_filter = (
+        _merge_filters(query_filter, build_exclude_inactive_filter())
+        if exclude_inactive
+        else query_filter
+    )
 
     return client.search(
         collection_name=settings.QDRANT_COLLECTION_NAME,
         query_vector=vector,
         limit=limit,
-        query_filter=query_filter,
+        query_filter=effective_filter,
+        score_threshold=score_threshold,
         with_payload=True,
     )
