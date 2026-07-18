@@ -81,3 +81,11 @@ models/
 # ─── Misc ───────────────────────────────────────────────────────────────────
 *.zip
 *.tar.gz
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.vscode/
+.idea/
+node_modules/

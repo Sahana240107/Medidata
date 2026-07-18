@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/useAuthStore';
+import ChatButton from '@/components/chat/ChatButton';
+import ChatPanel from '@/components/chat/ChatPanel';
 
 const NAV_ITEMS = [
   {
@@ -389,6 +391,9 @@ export default function DashboardLayout({ children }) {
       }}>
         {children}
       </main>
+
+      <ChatButton />
+      <ChatPanel />
     </div>
   );
 }

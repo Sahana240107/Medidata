@@ -54,6 +54,7 @@ function buildRawPayload({ form, symptoms, labResults, medications, procedures }
     age_range:              form.age_range,
     sex:                    form.sex,
     country:                form.country.trim(),
+    diagnosis:              form.diagnosis.trim() || null,
     clinical_notes_summary: form.clinical_notes_summary.trim() || null,
     outcome:                form.outcome || null,
     symptoms: symptoms
@@ -204,7 +205,7 @@ function FingerprintPreview({ fingerprint, layers_applied, onConfirm, onBack, su
 export default function CaseForm({ onSubmit }) {
   const token = useAuthStore((state) => state.token);
   // Form state
-  const [form, setForm] = useState({ age_range: "", sex: "", country: "", clinical_notes_summary: "", outcome: "" });
+  const [form, setForm] = useState({ age_range: "", sex: "", country: "", diagnosis: "", clinical_notes_summary: "", outcome: "" });
   const [symptoms, setSymptoms] = useState([{ name: "", onset_day: "" }]);
   const [labResults, setLabResults] = useState([{ marker: "", value: "", flag: "" }]);
   const [medications, setMedications] = useState([{ name: "", response: "" }]);
@@ -257,6 +258,7 @@ export default function CaseForm({ onSubmit }) {
       age_range:              dobToAgeRange(data.dob) || "",
       sex:                    normalizeSex(data.sex) || "",
       country:                addressToCountry(data.address) || "",
+      diagnosis:              data.diagnosis || data.disease || "",
       clinical_notes_summary: data.clinical_notes || "",
       outcome:                (data.outcome || "").toLowerCase() || "",
     });
@@ -495,6 +497,16 @@ export default function CaseForm({ onSubmit }) {
         <div className="form-group">
           <label className="form-label">Country</label>
           <input name="country" className="form-input" placeholder="e.g. India" value={form.country} onChange={handleField} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Diagnosis</label>
+          <input
+            name="diagnosis"
+            className="form-input"
+            placeholder="e.g. Hypertension, Breast Cancer, Tuberculosis"
+            value={form.diagnosis}
+            onChange={handleField}
+          />
         </div>
       </FormSection>
 

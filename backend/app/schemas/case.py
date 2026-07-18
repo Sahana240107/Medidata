@@ -73,6 +73,7 @@ class CaseCreate(BaseModel):
     age_range: Optional[str] = Field(None, description="Bucketed, e.g. '30-40' — never an exact DOB.")
     sex: Optional[str] = None
     country: Optional[str] = None
+    disease: Optional[str] = Field(None, description="Primary diagnosis, e.g. 'Hypertension'. Powers Research > Dataset grouping.")
 
     symptoms: List[SymptomItem] = []
     lab_results: List[LabResultItem] = []
@@ -103,6 +104,7 @@ class CaseRead(BaseModel):
     age_range: Optional[str] = None
     sex: Optional[str] = None
     country: Optional[str] = None
+    disease: Optional[str] = None
 
     symptoms: List[SymptomItem] = []
     lab_results: List[LabResultItem] = []

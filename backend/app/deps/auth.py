@@ -6,7 +6,7 @@ and loads the corresponding profile row (so routers know hospital_id/role).
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.db.supabase_client import get_supabase_admin
+from app.db.supabase_client import get_supabase_admin, get_supabase_anon
 
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
@@ -21,10 +21,18 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
         )
 
     token = authorization.split(" ", 1)[1].strip()
-    supabase = get_supabase_admin()
 
+    # IMPORTANT: token validation uses a fresh anon client, NOT the cached
+    # admin singleton. supabase.auth.get_user(token) sets that user's
+    # session on whichever client instance calls it — if that were the
+    # shared get_supabase_admin() singleton, every admin/service-role query
+    # anywhere else in the app would silently start running as this user
+    # (and their RLS restrictions) from this point on. get_supabase_anon()
+    # is not cached, so this client is discarded right after this call and
+    # never touches the real admin client.
+    auth_client = get_supabase_anon()
     try:
-        user_resp = supabase.auth.get_user(token)
+        user_resp = auth_client.auth.get_user(token)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
 
@@ -32,6 +40,9 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
 
+    # Profile lookup uses the real admin client — untouched by the above,
+    # always the actual service-role key, always bypasses RLS.
+    supabase = get_supabase_admin()
     try:
         profile_resp = (
             supabase.table("profiles")

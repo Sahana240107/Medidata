@@ -55,6 +55,12 @@ def ensure_collection() -> None:
         ("hospital_id", qmodels.PayloadSchemaType.KEYWORD),
         ("country", qmodels.PayloadSchemaType.KEYWORD),
         ("status", qmodels.PayloadSchemaType.KEYWORD),
+        # Added for the research-chat analytics tools (filtered scrolls /
+        # searches by disease, medication, outcome, age bucket).
+        ("disease", qmodels.PayloadSchemaType.KEYWORD),
+        ("medications", qmodels.PayloadSchemaType.KEYWORD),
+        ("outcome", qmodels.PayloadSchemaType.KEYWORD),
+        ("age_range", qmodels.PayloadSchemaType.KEYWORD),
     ]:
         client.create_payload_index(
             collection_name=settings.QDRANT_COLLECTION_NAME,

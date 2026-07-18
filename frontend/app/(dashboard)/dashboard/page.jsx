@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { fetchSignals, fetchStats } from '@/lib/api/feed';
 
 /* ── tiny helpers ── */
 const Tag = ({ color, children }) => {
@@ -43,7 +44,7 @@ function AnimatedNumber({ target, prefix = '', suffix = '' }) {
   const [val, setVal] = useState(0);
   const started = useRef(false);
   useEffect(() => {
-    if (started.current) return;
+    started.current = false; // allow re-animation when target changes after fetch resolves
     started.current = true;
     const duration = 1400;
     const start = Date.now();
@@ -62,60 +63,49 @@ function AnimatedNumber({ target, prefix = '', suffix = '' }) {
   return <>{prefix}{val.toLocaleString()}{suffix}</>;
 }
 
-/* ── Discovery feed data ── */
-const FEED = [
-  {
-    id: 1,
-    tagColor: 'red',
-    tagLabel: '🔴 Emerging Syndrome',
-    confidence: 81,
-    confColor: '#dc2626',
-    title: 'Potential Syndrome #42 — Progressive Neuromuscular Cascade',
-    meta: '23 cases · 5 countries · Updated 2h ago',
-    body: 'Clusters of patients presenting with early skin lesions followed by progressive neurological deterioration across India, Germany, Japan, Canada, and Brazil.',
-    actions: ['View Cases', 'Find Experts', 'Collaborate'],
+/* ── signal_type -> card presentation (DB has no styling info, so this maps it) ── */
+const SIGNAL_TYPE_META = {
+  emerging_syndrome: {
+    tagLabel: '🔴 Emerging Syndrome', tagColor: 'red', confColor: '#dc2626',
     headerBg: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
   },
-  {
-    id: 2,
-    tagColor: 'blue',
-    tagLabel: '💊 Drug Response',
-    confidence: 74,
-    confColor: 'var(--lavender-600)',
-    title: 'Unexpected Response to Tocilizumab in Rare Autoimmune Profiles',
-    meta: '67 patients · 4 hospitals · Updated 5h ago',
-    body: 'Unexpectedly favorable outcomes in patients with concurrent elevated IL-6 and specific HLA alleles — 78% success vs. expected 42%.',
-    actions: ['View Signal', 'Add Cases'],
+  drug_response: {
+    tagLabel: '💊 Drug Response', tagColor: 'blue', confColor: 'var(--lavender-600)',
     headerBg: 'linear-gradient(135deg, var(--lavender-500) 0%, var(--lavender-700) 100%)',
   },
-  {
-    id: 3,
-    tagColor: 'teal',
-    tagLabel: '🧬 Novel Biomarker',
-    confidence: 68,
-    confColor: '#0d9488',
-    title: 'Biomarker Signal — VEGF-D Elevation in Pre-Symptomatic Phase',
-    meta: 'India · Germany · Japan · Canada · Updated 1d ago',
-    body: 'VEGF-D elevation detected 6–8 weeks before symptomatic onset across 4 countries. May enable significantly earlier diagnosis windows.',
-    actions: ['Explore Signal', 'Validate'],
+  biomarker: {
+    tagLabel: '🧬 Novel Biomarker', tagColor: 'teal', confColor: '#0d9488',
     headerBg: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)',
   },
-  {
-    id: 4,
-    tagColor: 'violet',
-    tagLabel: '🔬 Research Opportunity',
-    confidence: 79,
-    confColor: '#7c3aed',
-    title: 'Multi-Centre Trial — HLA-B27 Arthritis Phenotype Mapping',
-    meta: '412 supporting cases · 18 hospitals · Updated 3d ago',
-    body: 'Validation phase opening for a novel HLA-B27 phenotype cluster with atypical joint involvement patterns observed across 6 continents.',
-    actions: ['Join Study', 'View Protocol'],
+  research_opportunity: {
+    tagLabel: '🔬 Research Opportunity', tagColor: 'violet', confColor: '#7c3aed',
     headerBg: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
   },
-];
+};
 
-/* ── Stats ── */
-const STATS = [
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return `${Math.max(mins, 1)}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function buildMeta(signal) {
+  const count = signal.patient_count ?? signal.case_count;
+  const countLabel = signal.patient_count ? 'patients' : 'cases';
+  const parts = [`${count} ${countLabel}`];
+  if (signal.hospital_count) parts.push(`${signal.hospital_count} hospitals`);
+  else if (signal.countries?.length) parts.push(`${signal.countries.length} countries`);
+  parts.push(`Updated ${timeAgo(signal.updated_at)}`);
+  return parts.join(' · ');
+}
+
+/* ── Stat card definitions — icon + color chrome stay static, values come from the API ── */
+const STAT_ICONS = [
   {
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18 }}>
@@ -123,7 +113,7 @@ const STATS = [
       </svg>
     ),
     iconBg: 'var(--lavender-50)', iconColor: 'var(--lavender-600)',
-    value: 2841, label: 'Matched Cases Globally', delta: '↑ 14% this week', deltaUp: true,
+    label: 'Matched Cases Globally', key: 'matched_cases_global',
   },
   {
     icon: (
@@ -134,7 +124,7 @@ const STATS = [
       </svg>
     ),
     iconBg: '#ccfbf1', iconColor: '#0d9488',
-    value: 312, label: 'Discovery Signals Active', delta: '↑ 6 new today', deltaUp: true,
+    label: 'Discovery Signals Active', key: 'active_signals',
   },
   {
     icon: (
@@ -146,7 +136,7 @@ const STATS = [
       </svg>
     ),
     iconBg: '#ede9fe', iconColor: '#7c3aed',
-    value: 48, label: 'Active Collaborations', delta: '↑ 3 this month', deltaUp: true,
+    label: 'Active Collaborations', key: 'active_collaborations',
   },
   {
     icon: (
@@ -155,17 +145,15 @@ const STATS = [
       </svg>
     ),
     iconBg: '#fef3c7', iconColor: '#d97706',
-    value: '#12', label: 'AIIMS Global Rank', delta: '↑ 3 positions', deltaUp: true,
+    label: 'Hospital Global Rank', key: 'hospital_rank', prefix: '#',
   },
 ];
 
-/* ── AI Chat modal ── */
+/* ── AI Chat modal (unchanged — demo content, not part of the data wiring) ── */
 function AIChatModal({ open, onClose }) {
   const [msg, setMsg] = useState('');
   const [messages, setMessages] = useState([
-    { role: 'ai', text: "Hello Dr. Priya. I've analysed your recent case submissions. Based on the symptom profile, Syndrome #42 appears highly relevant — 81% confidence match. Want me to summarise the key findings?" },
-    { role: 'user', text: "Yes, what's the most effective treatment so far?" },
-    { role: 'ai', text: "Across 23 matched cases, Drug X shows the highest efficacy at 78% success rate. Steroids were ineffective in all cases. Would you like contact details for Dr. Tanaka, who has managed 12 similar cases?" },
+    { role: 'ai', text: "Hello. I've analysed your recent case submissions. Based on the symptom profile, one of your active signals looks highly relevant. Want me to summarise the key findings?" },
   ]);
   if (!open) return null;
   const send = () => {
@@ -190,7 +178,6 @@ function AIChatModal({ open, onClose }) {
           display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: '80vh',
         }}
       >
-        {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, padding: '18px 20px',
           borderBottom: '1px solid var(--lavender-100)',
@@ -219,7 +206,6 @@ function AIChatModal({ open, onClose }) {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
         </div>
-        {/* Messages */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {messages.map((m, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
@@ -234,7 +220,6 @@ function AIChatModal({ open, onClose }) {
             </div>
           ))}
         </div>
-        {/* Input */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid var(--lavender-100)', display: 'flex', gap: 8 }}>
           <textarea
             rows={2}
@@ -264,7 +249,7 @@ function AIChatModal({ open, onClose }) {
   );
 }
 
-/* ── New Case Modal ── */
+/* ── New Case Modal (unchanged) ── */
 function NewCaseModal({ open, onClose }) {
   if (!open) return null;
   return (
@@ -311,7 +296,17 @@ function NewCaseModal({ open, onClose }) {
 export default function DashboardPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [newCaseOpen, setNewCaseOpen] = useState(false);
-  const [notifCount] = useState(7);
+  const [notifCount] = useState(0);
+
+  const [stats, setStats] = useState(null);
+  const [statsError, setStatsError] = useState(null);
+  const [signals, setSignals] = useState(null);
+  const [signalsError, setSignalsError] = useState(null);
+
+  useEffect(() => {
+    fetchStats().then(setStats).catch(e => setStatsError(e.message));
+    fetchSignals(4).then(setSignals).catch(e => setSignalsError(e.message));
+  }, []);
 
   const now = new Date();
   const hour = now.getHours();
@@ -335,19 +330,17 @@ export default function DashboardPage() {
         zIndex: 30,
         boxShadow: '0 1px 8px rgba(92,107,192,0.06)',
       }}>
-        {/* Left: greeting */}
         <div>
           <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--navy)', fontFamily: "'Sora', sans-serif" }}>
-            {greeting}, Dr. Priya 👋
+            {greeting} 👋
           </div>
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 1 }}>
-            {now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · AIIMS New Delhi
+            {now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            {stats?.hospital_name ? ` · ${stats.hospital_name}` : ''}
           </div>
         </div>
 
-        {/* Right: + Add Case, AI Chatbot, Notifications */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* + New Case */}
           <button
             onClick={() => setNewCaseOpen(true)}
             title="Add new case"
@@ -366,7 +359,6 @@ export default function DashboardPage() {
             New Case
           </button>
 
-          {/* AI Chatbot */}
           <button
             onClick={() => setChatOpen(true)}
             title="Open MediData AI"
@@ -381,7 +373,6 @@ export default function DashboardPage() {
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--lavender-600)'; e.currentTarget.querySelector('svg').style.stroke = 'white'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'var(--white)'; e.currentTarget.querySelector('svg').style.stroke = 'var(--lavender-600)'; }}
           >
-            {/* Robot/AI icon */}
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--lavender-600)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="8" width="18" height="11" rx="2" />
               <path d="M12 3v5M9 8V6M15 8V6" />
@@ -395,7 +386,6 @@ export default function DashboardPage() {
             }} />
           </button>
 
-          {/* Notification Bell */}
           <button
             title="Notifications"
             style={{
@@ -466,35 +456,45 @@ export default function DashboardPage() {
           display: 'grid', gridTemplateColumns: 'repeat(4,1fr)',
           gap: 16, marginBottom: 28,
         }}>
-          {STATS.map((s, i) => (
-            <div key={i} style={{
-              background: 'var(--white)',
-              border: '1px solid var(--lavender-100)',
-              borderRadius: 14, padding: '18px 20px',
-              boxShadow: '0 2px 8px rgba(92,107,192,0.05)',
-              transition: 'transform 0.2s, box-shadow 0.2s',
-            }}
-              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(92,107,192,0.12)'; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(92,107,192,0.05)'; }}
-            >
-              <div style={{
-                width: 36, height: 36, borderRadius: 9,
-                background: s.iconBg, color: s.iconColor,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                marginBottom: 12,
-              }}>
-                {s.icon}
+          {STAT_ICONS.map((s, i) => {
+            const raw = stats?.[s.key];
+            const value = raw == null ? '—' : (s.prefix ? `${s.prefix}${raw}` : raw);
+            return (
+              <div key={i} style={{
+                background: 'var(--white)',
+                border: '1px solid var(--lavender-100)',
+                borderRadius: 14, padding: '18px 20px',
+                boxShadow: '0 2px 8px rgba(92,107,192,0.05)',
+                transition: 'transform 0.2s, box-shadow 0.2s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(92,107,192,0.12)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(92,107,192,0.05)'; }}
+              >
+                <div style={{
+                  width: 36, height: 36, borderRadius: 9,
+                  background: s.iconBg, color: s.iconColor,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  marginBottom: 12,
+                }}>
+                  {s.icon}
+                </div>
+                <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5, color: 'var(--navy)', fontFamily: "'Sora', sans-serif" }}>
+                  {!stats && !statsError ? (
+                    <span style={{ opacity: 0.35 }}>···</span>
+                  ) : (
+                    <AnimatedNumber target={value} />
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{s.label}</div>
               </div>
-              <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5, color: 'var(--navy)', fontFamily: "'Sora', sans-serif" }}>
-                <AnimatedNumber target={s.value} />
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{s.label}</div>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, marginTop: 6, color: s.deltaUp ? '#16a34a' : '#dc2626' }}>
-                {s.delta}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        {statsError && (
+          <div style={{ fontSize: 12, color: '#dc2626', marginTop: -20, marginBottom: 20 }}>
+            Couldn't load stats: {statsError}
+          </div>
+        )}
 
         {/* ── DISCOVERY FEED SECTION ── */}
         <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -520,10 +520,26 @@ export default function DashboardPage() {
           gap: 16,
           marginTop: 16,
         }}>
-          {FEED.map(item => (
+          {!signals && !signalsError && [0, 1, 2, 3].map(i => (
+            <div key={i} style={{
+              background: 'var(--lavender-50)', borderRadius: 16, minHeight: 260,
+              border: '1px solid var(--lavender-100)',
+            }} />
+          ))}
+          {signals?.map(item => (
             <FeedDiscoveryCard key={item.id} item={item} />
           ))}
         </div>
+        {signalsError && (
+          <div style={{ fontSize: 12, color: '#dc2626', marginTop: 12 }}>
+            Couldn't load the discovery feed: {signalsError}
+          </div>
+        )}
+        {signals && signals.length === 0 && (
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 12 }}>
+            No active signals yet — run the discovery scan or check back later.
+          </div>
+        )}
       </div>
     </>
   );
@@ -532,6 +548,8 @@ export default function DashboardPage() {
 /* ── Discovery Card: color band on top, content below ── */
 function FeedDiscoveryCard({ item }) {
   const [hovered, setHovered] = useState(false);
+  const meta = SIGNAL_TYPE_META[item.signal_type] || SIGNAL_TYPE_META.research_opportunity;
+
   return (
     <div
       onMouseEnter={() => setHovered(true)}
@@ -551,13 +569,12 @@ function FeedDiscoveryCard({ item }) {
     >
       {/* Colored top band */}
       <div style={{
-        background: item.headerBg,
+        background: meta.headerBg,
         padding: '18px 18px 16px',
         position: 'relative',
         overflow: 'hidden',
         minHeight: 80,
       }}>
-        {/* Decorative circle */}
         <div style={{
           position: 'absolute', right: -20, top: -20,
           width: 80, height: 80, borderRadius: '50%',
@@ -575,13 +592,13 @@ function FeedDiscoveryCard({ item }) {
           fontSize: 11, fontWeight: 700, color: 'white',
           position: 'relative', zIndex: 1,
         }}>
-          {item.tagLabel}
+          {meta.tagLabel}
         </div>
         <div style={{
           marginTop: 10, fontSize: 10, color: 'rgba(255,255,255,0.75)',
           fontWeight: 500, position: 'relative', zIndex: 1,
         }}>
-          {item.meta}
+          {buildMeta(item)}
         </div>
       </div>
 
@@ -591,14 +608,14 @@ function FeedDiscoveryCard({ item }) {
           {item.title}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, flex: 1 }}>
-          {item.body}
+          {item.summary}
         </div>
 
-        <ConfBar pct={item.confidence} color={item.confColor} />
+        <ConfBar pct={item.confidence} color={meta.confColor} />
 
         {/* Explore More button */}
         <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--lavender-50)' }}>
-          <Link href="/feed" style={{ textDecoration: 'none' }}>
+          <Link href={`/feed/${item.id}`} style={{ textDecoration: 'none' }}>
             <button style={{
               width: '100%', padding: '8px 0',
               background: 'var(--lavender-50)', color: 'var(--lavender-700)',
