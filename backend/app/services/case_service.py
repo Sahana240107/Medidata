@@ -39,6 +39,7 @@ def _build_insert_row(case_data: dict, hospital_id: str, submitted_by: str, fing
         "age_range": case_data.get("age_range"),
         "sex": case_data.get("sex"),
         "country": case_data.get("country"),
+        "disease": case_data.get("disease") or case_data.get("diagnosis"),
         "symptoms": case_data.get("symptoms", []),
         "lab_results": case_data.get("lab_results", []),
         "medications": case_data.get("medications", []),

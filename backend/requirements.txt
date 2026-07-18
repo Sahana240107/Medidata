@@ -33,3 +33,13 @@ asyncpg==0.29.0
 psycopg2-binary==2.9.9
 pdfplumber==0.11.0
 python-multipart==0.0.9
+
+# Groq (tool-calling research chat agent)
+groq==1.5.0
+
+# Dataset export (Research > Dataset page — CSV/XLSX download)
+openpyxl==3.1.2
+
+# Testing
+pytest==8.2.0
+pytest-mock==3.14.0

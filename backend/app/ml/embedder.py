@@ -24,3 +24,14 @@ def embed_text(text: str) -> List[float]:
     model = get_embedding_model()
     vector = model.encode(text, normalize_embeddings=True)
     return vector.tolist()
+
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    """Batch version — encodes many texts in one model.encode() call.
+    Used by the discovery clustering pipeline, which embeds every active
+    case at once; batching is meaningfully faster than looping embed_text()."""
+    if not texts:
+        return []
+    model = get_embedding_model()
+    vectors = model.encode(texts, normalize_embeddings=True)
+    return vectors.tolist()
