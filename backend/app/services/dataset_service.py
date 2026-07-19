@@ -1,56 +1,68 @@
 """
 Powers the Research > Dataset page: real disease/domain/location groupings,
 filter-aware summary stats, and CSV/Excel export — all computed from the
-live `cases` table (no mock data).
+live Qdrant case_fingerprints collection (not Supabase). Qdrant's payload
+already carries a clean `disease` value and richer structured fields
+(icd_codes, diagnosis_icd, symptom_names, lab_markers) than the raw
+Supabase `cases` row does, so it's the better source for this feature.
+
+Hospital NAMES (for readable export columns) still come from a small
+Supabase lookup — Qdrant only stores hospital_id, not the hospital's name.
+That's the one place this still touches Supabase.
 """
 
 import csv
 import io
 import logging
 from collections import defaultdict
-from datetime import datetime
 
 from fastapi import HTTPException, status
 
+from app.core.config import get_settings
 from app.core.disease_domains import classify_domain
+from app.db.qdrant_client import get_qdrant_client
 from app.db.supabase_client import get_supabase_admin
 
-logger = logging.getLogger("medidata.feed_stats")  # reusing the same logger already configured in supabase_client.py
+logger = logging.getLogger("medidata.feed_stats")
 
-CASE_FIELDS = "id,hospital_id,disease,country,sex,age_range,symptoms,lab_results,medications,outcome,status,created_at"
-PAGE_SIZE = 1000  # Postgrest's per-request cap — must paginate past it
+SCROLL_PAGE_SIZE = 500
 
 
-def _fetch_all_cases() -> list[dict]:
-    """Every row in `cases`, paginated past Postgrest's row cap."""
-    supabase = get_supabase_admin()
-    rows: list[dict] = []
-    offset = 0
+def _fetch_all_case_payloads() -> list[dict]:
+    """Every point's payload in the case_fingerprints Qdrant collection."""
+    settings = get_settings()
+    client = get_qdrant_client()
+
+    payloads: list[dict] = []
+    next_offset = None
     page_num = 0
+
     while True:
         try:
-            resp = (
-                supabase.table("cases")
-                .select(CASE_FIELDS)
-                .limit(PAGE_SIZE)
-                .offset(offset)
-                .execute()
+            points, next_offset = client.scroll(
+                collection_name=settings.QDRANT_COLLECTION_NAME,
+                limit=SCROLL_PAGE_SIZE,
+                offset=next_offset,
+                with_payload=True,
+                with_vectors=False,
             )
         except Exception as e:
-            logger.error("[dataset_service] cases fetch FAILED at offset=%d: %r", offset, e)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to fetch cases: {e}")
-        batch = resp.data or []
+            logger.error("[dataset_service] Qdrant scroll FAILED: %r", e)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to fetch cases from Qdrant: {e}")
+
         page_num += 1
-        logger.info("[dataset_service] page %d @ offset=%d -> got %d rows", page_num, offset, len(batch))
-        rows.extend(batch)
-        if len(batch) < PAGE_SIZE:
+        logger.info("[dataset_service] Qdrant page %d -> got %d points", page_num, len(points))
+        payloads.extend(p.payload or {} for p in points)
+
+        if next_offset is None:
             break
-        offset += PAGE_SIZE
-    logger.info("[dataset_service] TOTAL rows fetched: %d", len(rows))
-    return rows
+
+    logger.info("[dataset_service] TOTAL Qdrant payloads fetched: %d", len(payloads))
+    return payloads
 
 
 def _hospital_names(hospital_ids: set[str]) -> dict[str, str]:
+    """Small Supabase lookup — Qdrant only has hospital_id, not the name."""
     if not hospital_ids:
         return {}
     supabase = get_supabase_admin()
@@ -64,11 +76,7 @@ def _apply_filters(rows: list[dict], filters: dict) -> list[dict]:
     countries = set(filters.get("countries") or [])
     sexes = set(filters.get("sexes") or [])
     age_ranges = set(filters.get("age_ranges") or [])
-    date_from = filters.get("date_from")
-    date_to = filters.get("date_to")
 
-    # A domain selection is shorthand for "every disease in that domain" —
-    # combine it with any explicitly selected diseases (OR, not AND).
     disease_or_domain_active = bool(diseases or domains)
 
     def matches(row: dict) -> bool:
@@ -83,10 +91,6 @@ def _apply_filters(rows: list[dict], filters: dict) -> list[dict]:
             return False
         if age_ranges and row.get("age_range") not in age_ranges:
             return False
-        if date_from and (row.get("created_at") or "") < date_from:
-            return False
-        if date_to and (row.get("created_at") or "") > date_to:
-            return False
         return True
 
     return [r for r in rows if matches(r)]
@@ -94,23 +98,17 @@ def _apply_filters(rows: list[dict], filters: dict) -> list[dict]:
 
 def _summarize(rows: list[dict]) -> dict:
     if not rows:
-        return {
-            "total_cases": 0, "institutions": 0, "countries": 0,
-            "date_range": None,
-        }
+        return {"total_cases": 0, "institutions": 0, "countries": 0, "date_range": None}
     hospital_ids = {r["hospital_id"] for r in rows if r.get("hospital_id")}
     countries = {r["country"] for r in rows if r.get("country")}
-    dates = [r["created_at"] for r in rows if r.get("created_at")]
-    date_range = None
-    if dates:
-        years = sorted({d[:4] for d in dates if d and len(d) >= 4})
-        if years:
-            date_range = f"{years[0]}–{years[-1]}" if years[0] != years[-1] else years[0]
     return {
         "total_cases": len(rows),
         "institutions": len(hospital_ids),
         "countries": len(countries),
-        "date_range": date_range,
+        # Qdrant's payload doesn't carry a submission timestamp (unlike the
+        # Supabase `cases.created_at` column), so there's nothing to compute
+        # a date range from here. Showing None -> renders as "—" in the UI.
+        "date_range": None,
     }
 
 
@@ -119,7 +117,7 @@ def _summarize(rows: list[dict]) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_facets() -> dict:
-    rows = _fetch_all_cases()
+    rows = _fetch_all_case_payloads()
 
     disease_groups: dict[str, dict] = defaultdict(lambda: {"case_count": 0, "hospital_ids": set(), "countries": set()})
     domain_groups: dict[str, dict] = defaultdict(lambda: {"case_count": 0, "hospital_ids": set(), "countries": set(), "diseases": set()})
@@ -196,40 +194,34 @@ def get_facets() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_summary(filters: dict) -> dict:
-    rows = _fetch_all_cases()
+    rows = _fetch_all_case_payloads()
     filtered = _apply_filters(rows, filters)
     return _summarize(filtered)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Export — real filtered case rows as CSV or XLSX bytes
+# Export — filtered case rows as CSV or XLSX bytes, using Qdrant's richer
+# structured fields (icd_codes, diagnosis_icd) that Supabase's raw jsonb
+# blobs didn't cleanly expose.
 # ─────────────────────────────────────────────────────────────────────────────
 
 EXPORT_COLUMNS = [
-    "id", "disease", "domain", "hospital", "country", "sex", "age_range",
-    "symptoms", "lab_results", "medications", "outcome", "status", "created_at",
+    "case_id", "disease", "domain", "diagnosis_icd", "hospital", "country", "sex", "age_range",
+    "symptom_names", "icd_codes", "lab_markers", "medications", "procedures",
+    "outcome", "status", "week_admitted",
 ]
 
 
-def _flatten_list_field(value) -> str:
+def _flatten(value) -> str:
     if not value:
         return ""
     if isinstance(value, list):
-        parts = []
-        for item in value:
-            if isinstance(item, dict):
-                # symptoms: {name,...} / lab_results: {marker,value,flag} / medications: {name,response}
-                label = item.get("name") or item.get("marker") or str(item)
-                extra = item.get("value") or item.get("response") or item.get("flag")
-                parts.append(f"{label} ({extra})" if extra else str(label))
-            else:
-                parts.append(str(item))
-        return "; ".join(parts)
+        return "; ".join(str(v) for v in value)
     return str(value)
 
 
 def get_export_rows(filters: dict) -> list[dict]:
-    rows = _fetch_all_cases()
+    rows = _fetch_all_case_payloads()
     filtered = _apply_filters(rows, filters)
 
     hospital_ids = {r["hospital_id"] for r in filtered if r.get("hospital_id")}
@@ -238,19 +230,22 @@ def get_export_rows(filters: dict) -> list[dict]:
     out = []
     for r in filtered:
         out.append({
-            "id": r.get("id"),
+            "case_id": r.get("case_id"),
             "disease": r.get("disease") or "Unclassified",
             "domain": classify_domain(r.get("disease")),
+            "diagnosis_icd": r.get("diagnosis_icd") or "",
             "hospital": hospital_names.get(r.get("hospital_id"), r.get("hospital_id") or ""),
             "country": r.get("country") or "",
             "sex": r.get("sex") or "",
             "age_range": r.get("age_range") or "",
-            "symptoms": _flatten_list_field(r.get("symptoms")),
-            "lab_results": _flatten_list_field(r.get("lab_results")),
-            "medications": _flatten_list_field(r.get("medications")),
+            "symptom_names": _flatten(r.get("symptom_names")),
+            "icd_codes": _flatten(r.get("icd_codes")),
+            "lab_markers": _flatten(r.get("lab_markers")),
+            "medications": _flatten(r.get("medications")),
+            "procedures": _flatten(r.get("procedures")),
             "outcome": r.get("outcome") or "",
             "status": r.get("status") or "",
-            "created_at": r.get("created_at") or "",
+            "week_admitted": r.get("week_admitted") if r.get("week_admitted") is not None else "",
         })
     return out
 
@@ -261,7 +256,7 @@ def rows_to_csv_bytes(rows: list[dict]) -> bytes:
     writer.writeheader()
     for row in rows:
         writer.writerow(row)
-    return buf.getvalue().encode("utf-8-sig")  # BOM so Excel opens UTF-8 correctly
+    return buf.getvalue().encode("utf-8-sig")
 
 
 def rows_to_xlsx_bytes(rows: list[dict]) -> bytes:
@@ -296,10 +291,6 @@ def rows_to_xlsx_bytes(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Simple catalog — for DatasetDownloadPanel's single-select disease dropdown
-# ─────────────────────────────────────────────────────────────────────────────
-
 def get_catalog() -> dict:
     """
     Everything DatasetDownloadPanel needs in one call: every disease, domain,
@@ -309,30 +300,15 @@ def get_catalog() -> dict:
     facets = get_facets()
     return {
         "diseases": [
-            {
-                "disease": d["name"],
-                "domain": d["domain"],
-                "case_count": d["case_count"],
-                "institution_count": d["hospital_count"],
-            }
+            {"disease": d["name"], "domain": d["domain"], "case_count": d["case_count"], "institution_count": d["hospital_count"]}
             for d in facets["diseases"]
         ],
         "domains": [
-            {
-                "domain": d["name"],
-                "case_count": d["case_count"],
-                "institution_count": d["hospital_count"],
-                "disease_count": d["disease_count"],
-            }
+            {"domain": d["name"], "case_count": d["case_count"], "institution_count": d["hospital_count"], "disease_count": d["disease_count"]}
             for d in facets["domains"]
         ],
         "locations": [
-            {
-                "country": c["name"],
-                "case_count": c["case_count"],
-                "institution_count": c["hospital_count"],
-                "disease_count": c["disease_count"],
-            }
+            {"country": c["name"], "case_count": c["case_count"], "institution_count": c["hospital_count"], "disease_count": c["disease_count"]}
             for c in facets["countries"]
         ],
         "genders": facets["sexes"],
@@ -341,17 +317,12 @@ def get_catalog() -> dict:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Schema cache reload — lets the "Refresh" button fix PostgREST's stale
-# schema cache without you needing to run NOTIFY manually in SQL Editor.
-# ─────────────────────────────────────────────────────────────────────────────
-
 def reload_schema_cache() -> None:
+    """Kept for the existing /reload-schema-cache endpoint. Not relevant to
+    Qdrant (no schema cache to stale), but harmless to leave callable —
+    reloads Postgres/PostgREST in case other parts of the app still need it."""
     supabase = get_supabase_admin()
     try:
         supabase.rpc("reload_postgrest_schema", {}).execute()
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to reload schema cache: {e}",
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to reload schema cache: {e}")

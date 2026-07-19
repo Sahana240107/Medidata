@@ -104,6 +104,7 @@ def _persist(insert_row: dict, case_data: dict, hospital_id: str) -> dict:
         ],
         "procedures":     case_data.get("procedures", []),
         "week_admitted":  case_data.get("week_admitted"),
+        "disease":        case_data.get("disease") or case_data.get("diagnosis"),
     }
 
     try:
