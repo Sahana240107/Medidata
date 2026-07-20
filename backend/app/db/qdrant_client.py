@@ -128,6 +128,33 @@ def _merge_filters(*filters) -> qmodels.Filter:
     return qmodels.Filter(must=must or None, must_not=must_not or None, should=should or None)
 
 
+def scroll_all(limit: int = 300, hospital_id: str = None):
+    """
+    Fetches up to `limit` fingerprint points (vector + de-identified
+    payload), optionally scoped to one node's hospital_id. Backs the
+    fingerprint-space projection (PCA scatter) — it only ever touches the
+    same de-identified payload already stored for search, never raw
+    patient data, and no patient identifiers are present in it.
+    """
+    settings = get_settings()
+    client = get_qdrant_client()
+
+    query_filter = None
+    if hospital_id:
+        query_filter = qmodels.Filter(
+            must=[qmodels.FieldCondition(key="hospital_id", match=qmodels.MatchValue(value=hospital_id))]
+        )
+
+    points, _next_offset = client.scroll(
+        collection_name=settings.QDRANT_COLLECTION_NAME,
+        scroll_filter=_merge_filters(query_filter, build_exclude_inactive_filter()),
+        limit=limit,
+        with_payload=True,
+        with_vectors=True,
+    )
+    return points
+
+
 def search_similar(
     vector: list,
     limit: int = 10,

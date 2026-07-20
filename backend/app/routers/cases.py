@@ -139,7 +139,7 @@ async def process_case(body: ProcessRequest, user: dict = Depends(get_current_us
     """
     result = case_service.process_case(
         raw=body.raw,
-        hospital_id=user["hospital_id"],
+        hospital_id=body.node_id or user["hospital_id"],
     )
     return result
 
@@ -155,7 +155,7 @@ async def submit_case(body: SubmitRequest, user: dict = Depends(get_current_user
     case_row = case_service.submit_processed_case(
         fingerprint=body.fingerprint,
         token_H=body.token_H,
-        hospital_id=user["hospital_id"],
+        hospital_id=body.node_id or user["hospital_id"],
         submitted_by=user["id"],
     )
     return case_row

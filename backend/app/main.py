@@ -8,7 +8,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, cases, search
+from app.routers import auth, cases, search, hospitals, viz, discovery, cli_sync
 from app.db.qdrant_client import ensure_collection
 
 app = FastAPI(
@@ -39,6 +39,10 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(cases.router)
 app.include_router(search.router)
+app.include_router(hospitals.router)
+app.include_router(viz.router)
+app.include_router(discovery.router)
+app.include_router(cli_sync.router)
 
 
 @app.get("/health")

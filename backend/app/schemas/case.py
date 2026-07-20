@@ -38,6 +38,25 @@ class MedicationItem(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pipeline transform step (Multi-Node Simulator — visible privacy pipeline)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PipelineStepDiff(BaseModel):
+    removed: List[str] = []
+    added: List[str] = []
+    changed: List[str] = []
+
+
+class PipelineStep(BaseModel):
+    """One layer of the 6-layer privacy pipeline, with a before/after snapshot."""
+    layer: str
+    label: str
+    before: Dict[str, Any]
+    after: Dict[str, Any]
+    diff: PipelineStepDiff
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Two-step flow schemas
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -47,6 +66,11 @@ class ProcessRequest(BaseModel):
     The privacy pipeline strips / generalises everything before returning the preview.
     """
     raw: Dict[str, Any] = Field(..., description="Raw extracted case data from /extract-pdf or manual entry.")
+    node_id: Optional[str] = Field(
+        None,
+        description="Hospital/node context to process this case as, for the Multi-Node Simulator. "
+                    "Defaults to the caller's own hospital.",
+    )
 
 
 class ProcessResponse(BaseModel):
@@ -54,6 +78,10 @@ class ProcessResponse(BaseModel):
     fingerprint: Dict[str, Any] = Field(..., description="De-identified record ready for storage.")
     token_H: str = Field(..., description="Hospital-side split key for future traceback. Store locally — never sent to MediData.")
     layers_applied: List[str] = Field(..., description="Ordered list of privacy layers that were applied.")
+    steps: List[PipelineStep] = Field(
+        default_factory=list,
+        description="Step-by-step before/after snapshot for each privacy layer, for the transform-view UI.",
+    )
 
 
 class SubmitRequest(BaseModel):
@@ -63,6 +91,11 @@ class SubmitRequest(BaseModel):
     """
     fingerprint: Dict[str, Any]
     token_H: str
+    node_id: Optional[str] = Field(
+        None,
+        description="Hospital/node context to submit this case into, for the Multi-Node Simulator. "
+                    "Defaults to the caller's own hospital.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

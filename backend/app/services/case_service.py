@@ -47,6 +47,7 @@ def _build_insert_row(case_data: dict, hospital_id: str, submitted_by: str, fing
         "genomic_metadata": case_data.get("genomic_metadata", []),
         "clinical_notes_summary": case_data.get("clinical_notes_summary"),
         "outcome": case_data.get("outcome"),
+        "diagnosis_icd": case_data.get("diagnosis_icd"),
     }
 
 
@@ -201,7 +202,23 @@ def create_case(case_in, hospital_id: str, submitted_by: str) -> dict:
     insert_row = _build_insert_row(case_data, hospital_id, submitted_by, fp_id)
     return _persist(insert_row, case_data, hospital_id)
 
+def create_case_with_fingerprint_id(
+    case_data: dict, hospital_id: str, submitted_by: str, fingerprint_id: str
+) -> dict:
+    """
+    Used by POST /api/cli/sync. Identical to create_case() except the
+    fingerprint_id is supplied by the caller (deterministically derived by
+    the CLI from source_table:source_id) rather than generated here — this
+    is what lets the router recognize the same local record synced twice
+    as a duplicate instead of creating a second case.
+    """
+    try:
+        check_case_payload(case_data)
+    except DeidentificationError:
+        raise  # let the router catch this and record it as a rejection
 
+    insert_row = _build_insert_row(case_data, hospital_id, submitted_by, fingerprint_id)
+    return _persist(insert_row, case_data, hospital_id)
 # ─────────────────────────────────────────────────────────────────────────────
 # Read helpers
 # ─────────────────────────────────────────────────────────────────────────────
