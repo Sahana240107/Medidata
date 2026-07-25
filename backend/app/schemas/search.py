@@ -23,7 +23,9 @@ class SearchRequest(BaseModel):
     specialties: Optional[List[str]] = None
     outcomes: Optional[List[str]] = None
     confidence_tiers: Optional[List[str]] = None  # very_high | high | moderate | low
-    limit: Optional[int] = 5   # how many case-cluster cards to return on the search page
+    limit: Optional[int] = 5   # reserved for future use (e.g. other result_type tabs) —
+                                # the "similar cases" list itself is no longer truncated here,
+                                # every filtered case is returned and the frontend paginates it
     offset: Optional[int] = 0  # used by the "all cases" full-list page for pagination
 
 

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 
-from app.db.supabase_client import get_supabase_admin
+from app.db.supabase_client import get_supabase_admin, get_supabase_anon
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,7 +37,12 @@ class LoginRequest(BaseModel):
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    refresh_token: Optional[str] = None
     user: dict
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -128,11 +133,18 @@ async def register(body: RegisterRequest):
         profile_resp = supabase.table("profiles").insert(profile_data).execute()
         profile = profile_resp.data[0] if profile_resp.data else profile_data
 
-        # 4. Sign in to get a real JWT for the user
-        sign_in = supabase.auth.sign_in_with_password(
+        # 4. Sign in to get a real JWT for the user.
+        # IMPORTANT: this must run on a fresh anon client, never on the
+        # cached get_supabase_admin() singleton — calling sign_in_with_password
+        # on that client would overwrite its session, so every later
+        # request in the process that calls get_supabase_admin() would
+        # silently start running as this user (and their RLS restrictions)
+        # instead of the service role. See the same note in deps/auth.py.
+        sign_in = get_supabase_anon().auth.sign_in_with_password(
             {"email": body.email, "password": body.password}
         )
         access_token = sign_in.session.access_token
+        refresh_token = sign_in.session.refresh_token
 
     except Exception as e:
         # Roll back auth user if profile creation fails
@@ -144,6 +156,7 @@ async def register(body: RegisterRequest):
 
     return AuthResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
         user=_safe_user(profile),
     )
 
@@ -154,10 +167,19 @@ async def login(body: LoginRequest):
     Sign in with email + password via Supabase Auth.
     Returns the session JWT + profile data.
     """
-    supabase = get_supabase_admin()
-
+    # Sign-in happens on a fresh anon client, NOT the cached admin
+    # singleton from get_supabase_admin(). That singleton is shared by
+    # every request in the process; calling an auth method that sets a
+    # session on it (sign_in_with_password / refresh_session) would
+    # silently swap its service-role identity for whichever user last
+    # logged in, and every later admin/service-role query anywhere else
+    # in the app — including this CLI's own profile lookups on
+    # /api/cli/sync — would start running as that user (subject to RLS)
+    # instead of the service role. This is exactly the failure mode
+    # deps/auth.py's get_current_user avoids by using get_supabase_anon()
+    # for token validation.
     try:
-        sign_in = supabase.auth.sign_in_with_password(
+        sign_in = get_supabase_anon().auth.sign_in_with_password(
             {"email": body.email, "password": body.password}
         )
     except Exception as e:
@@ -171,8 +193,11 @@ async def login(body: LoginRequest):
 
     user_id = sign_in.user.id
     access_token = sign_in.session.access_token
+    refresh_token = sign_in.session.refresh_token
 
-    # Fetch profile
+    # Profile lookup uses the real admin client — untouched by the sign-in
+    # above, always the actual service-role key, always bypasses RLS.
+    supabase = get_supabase_admin()
     try:
         profile_resp = (
             supabase.table("profiles")
@@ -187,6 +212,64 @@ async def login(body: LoginRequest):
 
     return AuthResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
+        user=_safe_user(profile),
+    )
+
+
+@router.post("/refresh", response_model=AuthResponse)
+async def refresh(body: RefreshRequest):
+    """
+    Exchanges a refresh_token for a new access_token (+ rotated refresh_token).
+
+    Supabase access tokens are short-lived (~1 hour by default). Long-running
+    clients — like `medidata serve`, which can sit open through MySQL setup,
+    doctor mapping, and sync preview before the user finally clicks Submit —
+    need this to avoid hitting "Invalid or expired token" on an otherwise
+    successful session just because time passed.
+
+    Like sign-in, this runs on a fresh anon client rather than the cached
+    admin singleton — refresh_session() sets a session on whichever client
+    calls it, and doing that on get_supabase_admin() would silently
+    replace its service-role identity with this doctor's session for
+    every other request sharing that singleton. In a long-running `medidata
+    serve` process this endpoint gets hit repeatedly (once per expired
+    access token), so without this fix the admin client's identity keeps
+    getting overwritten and any concurrent request depending on the real
+    service-role key — including the very next POST /api/cli/sync, and
+    other users' profile lookups in get_current_user — can start failing
+    with auth errors that look unrelated to their actual cause.
+    """
+    try:
+        refreshed = get_supabase_anon().auth.refresh_session(body.refresh_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token. Please log in again.")
+
+    if not refreshed or not refreshed.session:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token. Please log in again.")
+
+    user_id = refreshed.user.id
+    access_token = refreshed.session.access_token
+    new_refresh_token = refreshed.session.refresh_token
+
+    # Profile lookup uses the real admin client — untouched by the refresh
+    # above, always the actual service-role key, always bypasses RLS.
+    supabase = get_supabase_admin()
+    try:
+        profile_resp = (
+            supabase.table("profiles")
+            .select("*")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        profile = profile_resp.data
+    except Exception:
+        profile = {"id": user_id}
+
+    return AuthResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
         user=_safe_user(profile),
     )
 

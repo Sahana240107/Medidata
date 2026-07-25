@@ -187,6 +187,7 @@ export default function SearchPage() {
             open={detailOpen}
             activeCase={activeCase}
             activeTab={activeTab}
+            isLocked
             onClose={() => setDetailOpen(false)}
             onTabChange={setActiveTab}
           />

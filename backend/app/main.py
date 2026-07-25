@@ -1,7 +1,7 @@
 """
 MediData FastAPI backend entry point.
 """
-
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,8 +17,13 @@ from app.routers import (
     feed,
     experts,
     collaborations,
+    cli_sync,
     research_datasets,
+    hospitals
 )
+
+from app.hypothesis.falsification_engine.router import router as falsification_router
+from app.hypothesis.verdict_engine.router import router as verdict_router
 
 from app.db.qdrant_client import ensure_collection
 
@@ -57,9 +62,13 @@ app.include_router(cases.router)
 app.include_router(search.router)
 app.include_router(chat.router)
 app.include_router(feed.router)
+app.include_router(hospitals.router)
 app.include_router(experts.router)
 app.include_router(collaborations.router)
 app.include_router(research_datasets.router)
+app.include_router(cli_sync.router)
+app.include_router(falsification_router)
+app.include_router(verdict_router)
 
 
 @app.get("/health")

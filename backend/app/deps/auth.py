@@ -4,9 +4,13 @@ Verifies the Supabase access token sent as `Authorization: Bearer <token>`
 and loads the corresponding profile row (so routers know hospital_id/role).
 """
 
+import logging
+
 from fastapi import Depends, Header, HTTPException, status
 
 from app.db.supabase_client import get_supabase_admin, get_supabase_anon
+
+logger = logging.getLogger(__name__)
 
 
 async def get_current_user(authorization: str = Header(None)) -> dict:
@@ -34,10 +38,18 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
     try:
         user_resp = auth_client.auth.get_user(token)
     except Exception:
+        # This except was swallowing the real cause (wrong SUPABASE_ANON_KEY,
+        # wrong project URL, network/timeout to Supabase, clock skew, an
+        # actually-expired token, etc.) and reporting all of them as the same
+        # generic "Invalid or expired token." — logging it here so the actual
+        # error shows up in this server's console instead of only in the
+        # caller's 401 response.
+        logger.exception("get_current_user: auth_client.auth.get_user(token) raised")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
 
     user = getattr(user_resp, "user", None)
     if not user:
+        logger.warning("get_current_user: get_user(token) returned no user. Raw response: %r", user_resp)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
 
     # Profile lookup uses the real admin client — untouched by the above,

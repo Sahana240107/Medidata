@@ -12,8 +12,10 @@ Pipeline:
      field overlap (falls back to pure vector similarity if Groq gave us
      no structured terms to overlap against).
   5. Compute facets (confidence / region / specialty / outcome) over the
-     FULL unfiltered hit set, then apply any requested filters before
-     clustering hits by hospital into the "Case Cluster" cards the UI shows.
+     FULL unfiltered hit set, then apply any requested filters. Every hit
+     that survives filtering becomes its own result card — no hospital-level
+     clustering/collapsing — so the frontend can list and paginate all of a
+     person's matched cases individually.
   6. Aggregate the "Shared Clinical Signature" and "Outcome Intelligence"
      panels from the filtered hit set.
 
@@ -44,7 +46,10 @@ from app.schemas.search import (
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
 
-RECALL_LIMIT = 60          # how many raw Qdrant hits we pull before clustering/filtering
+RECALL_LIMIT = 200         # how many raw Qdrant hits we pull before filtering —
+                            # this (not `limit`) is what caps how many cases can show up
+                            # in results, since every hit that survives filtering is now
+                            # returned to the frontend for client-side pagination
 SCORE_FLOOR = 0.15         # drop hits below this cosine similarity — pure noise
 POSITIVE_OUTCOMES = {"recovered", "improved", "resolved", "stable"}
 NEGATIVE_OUTCOMES = {"deteriorated", "worsened", "deceased"}
@@ -174,7 +179,7 @@ def _recall_limit_for(body: SearchRequest) -> int:
     raw pool to still surface `limit` clusters after narrowing.
     """
     has_filters = any([body.regions, body.specialties, body.outcomes, body.confidence_tiers])
-    return min(RECALL_LIMIT * 2, 150) if has_filters else RECALL_LIMIT
+    return min(RECALL_LIMIT * 2, 400) if has_filters else RECALL_LIMIT
 
 
 async def run_search(body: SearchRequest, current_user: dict) -> SearchResponse:
@@ -258,48 +263,54 @@ async def run_search(body: SearchRequest, current_user: dict) -> SearchResponse:
             facets=facets,
         )
 
-    clusters = _cluster_hits(filtered)
-    rep_case_ids = [c["cases"][0]["case_id"] for c in clusters[: body.limit or 10]]
-    timelines = _fetch_timelines(rep_case_ids)
-    case_details = _fetch_case_details(rep_case_ids)
+    # Every matched case gets its own card — best match first. We no longer
+    # collapse same-hospital cases into a single aggregate "cluster" card;
+    # the person searching wants to see (and page through) every individual
+    # case, not a hospital-level rollup. `filtered` already carries every
+    # hit that survived the score floor + facet filters, so nothing here
+    # truncates the list — the frontend paginates the full set client-side.
+    ordered_hits = sorted(filtered, key=lambda x: x["match_pct"], reverse=True)
+    all_case_ids = [h["case_id"] for h in ordered_hits]
+    timelines = _fetch_timelines(all_case_ids)
+    case_details = _fetch_case_details(all_case_ids)
+
+    # Still useful for the "N cases at this hospital" badge without merging
+    # rows together — count occurrences per hospital across the filtered set.
+    hospital_case_counts = Counter(h["hospital_id"] or "unknown" for h in ordered_hits)
 
     results = []
-    for cluster in clusters[: (body.limit or 10)]:
-        rep = cluster["cases"][0]
-        outcomes_in_group = {c["outcome"] for c in cluster["cases"]}
-        tags = [rep["status"].title()]
-        if rep["outcome"] and rep["outcome"] != "unknown":
-            tags.append(rep["outcome"].title())
-        if rep.get("disease"):
+    for hit in ordered_hits:
+        tags = [hit["status"].title()]
+        if hit["outcome"] and hit["outcome"] != "unknown":
+            tags.append(hit["outcome"].title())
+        if hit.get("disease"):
             tags.append("Diagnosis confirmed")
-        if len(outcomes_in_group) > 1:
-            tags.append("Mixed outcomes")
 
-        is_own = bool(my_hospital_id) and rep["hospital_id"] == my_hospital_id
+        is_own = bool(my_hospital_id) and hit["hospital_id"] == my_hospital_id
 
-        detail = case_details.get(rep["case_id"], {})
+        detail = case_details.get(hit["case_id"], {})
         # Real symptom/lab names from Qdrant payload (always present) as the
         # baseline; Supabase row (when reachable) adds onset day / units /
         # flags on top for a richer detail-panel view.
-        symptoms = detail.get("symptoms") or [s.title() for s in rep["symptom_names"] if s]
-        lab_results = detail.get("lab_results") or [l.upper() for l in rep["lab_markers"] if l]
-        procedures = detail.get("procedures") or [p for p in rep["procedures"] if p]
+        symptoms = detail.get("symptoms") or [s.title() for s in hit["symptom_names"] if s]
+        lab_results = detail.get("lab_results") or [l.upper() for l in hit["lab_markers"] if l]
+        procedures = detail.get("procedures") or [p for p in hit["procedures"] if p]
 
         results.append(CaseClusterResult(
-            cluster_id=f"#{_country_code_of(rep['country']) or 'XX'}-{2024 + abs(hash(rep['hospital_id'] or '')) % 2}-{abs(hash(rep['hospital_id'] or '')) % 900 + 100}",
-            match_score=rep["match_pct"],
-            confidence_tier=rep["confidence_tier"],
-            hospital_name=rep["hospital_name"],
-            country=rep["country"],
-            country_code=_country_code_of(rep["country"]),
-            specialty=rep["specialty"],
-            managing_doctor=rep["doctor_name"],
-            case_count=len(cluster["cases"]),
+            cluster_id=f"#{_country_code_of(hit['country']) or 'XX'}-{str(hit['case_id'])[:8]}",
+            match_score=hit["match_pct"],
+            confidence_tier=hit["confidence_tier"],
+            hospital_name=hit["hospital_name"],
+            country=hit["country"],
+            country_code=_country_code_of(hit["country"]),
+            specialty=hit["specialty"],
+            managing_doctor=hit["doctor_name"],
+            case_count=hospital_case_counts.get(hit["hospital_id"] or "unknown", 1),
             outcome_tags=tags[:4],
-            timeline=timelines.get(rep["case_id"], []),
+            timeline=timelines.get(hit["case_id"], []),
             is_own_hospital=is_own,
-            representative_case_id=rep["case_id"],
-            disease_name=rep.get("disease"),
+            representative_case_id=hit["case_id"],
+            disease_name=hit.get("disease"),
             symptoms=symptoms,
             lab_results=lab_results,
             procedures=procedures,
@@ -517,21 +528,6 @@ def _apply_filters(hits: list, body: SearchRequest) -> list:
         wanted = set(body.confidence_tiers)
         out = [h for h in out if h["confidence_tier"] in wanted]
     return out
-
-
-def _cluster_hits(hits: list) -> list:
-    """Group filtered hits by hospital into 'Case Cluster' groups, best match first."""
-    groups = defaultdict(list)
-    for h in hits:
-        groups[h["hospital_id"] or "unknown"].append(h)
-
-    clusters = []
-    for hospital_id, group in groups.items():
-        group.sort(key=lambda x: x["match_pct"], reverse=True)
-        clusters.append({"hospital_id": hospital_id, "cases": group})
-
-    clusters.sort(key=lambda c: c["cases"][0]["match_pct"], reverse=True)
-    return clusters
 
 
 def _compute_facets(hits: list) -> SearchFacets:

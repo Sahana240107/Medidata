@@ -1,21 +1,27 @@
 /**
- * formatRelativeTime — "2h ago", "5 days ago", etc.
+ * Formats an ISO timestamp as a short relative string, e.g. "3h ago",
+ * "2d ago", "just now". Falls back to a locale date string once it's
+ * more than ~5 weeks old.
  */
-export function formatRelativeTime(dateString) {
-  if (!dateString) return "";
-  const then = new Date(dateString).getTime();
-  if (Number.isNaN(then)) return "";
-  const diffMs = Date.now() - then;
-  const minutes = Math.floor(diffMs / 60000);
+export function timeAgo(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
 
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w ago`;
-  const months = Math.floor(days / 30);
-  return `${months}mo ago`;
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 45) return 'just now';
+
+  const units = [
+    ['y', 60 * 60 * 24 * 365],
+    ['mo', 60 * 60 * 24 * 30],
+    ['d', 60 * 60 * 24],
+    ['h', 60 * 60],
+    ['m', 60],
+  ];
+
+  for (const [label, secondsInUnit] of units) {
+    const value = Math.floor(seconds / secondsInUnit);
+    if (value >= 1) return `${value}${label} ago`;
+  }
+  return 'just now';
 }

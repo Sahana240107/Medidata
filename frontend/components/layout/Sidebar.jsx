@@ -33,7 +33,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    href: "/cases/new",
+    href: "/cases",
     label: "New Case",
     icon: (
       <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18">

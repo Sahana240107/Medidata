@@ -3,13 +3,14 @@
 import { useState, useEffect } from 'react';
 import styles from '@/components/research/research.module.css';
 import WorkspaceHeader from '@/components/research/WorkspaceHeader';
-import DatasetScopePanel from '@/components/research/DatasetScopePanel';
+import DatasetUploadPanel from '@/components/research/DatasetUploadPanel';
 import TabSwitcher from '@/components/research/TabSwitcher';
 import HypothesisCard from '@/components/research/HypothesisCard';
 import EvidenceCaseCard from '@/components/research/EvidenceCaseCard';
+import EngineRunPanel from '@/components/research/EngineRunPanel';
 import ResearchQuestionBar from '@/components/research/ResearchQuestionBar';
 import Toast from '@/components/research/Toast';
-import { EVIDENCE_CASES } from '@/lib/researchMockData';
+import { EVIDENCE_CASES, RESEARCH_QUESTION } from '@/lib/researchMockData';
 
 export default function HypothesisPage() {
   const [toast, setToast] = useState('');
@@ -23,7 +24,7 @@ export default function HypothesisPage() {
   return (
     <div className={styles.page}>
       <WorkspaceHeader />
-      <DatasetScopePanel variant="expanded" />
+      <DatasetUploadPanel variant="expanded" />
       <TabSwitcher active="hypothesis" />
 
       <HypothesisCard onToast={setToast} />
@@ -36,6 +37,16 @@ export default function HypothesisPage() {
       {EVIDENCE_CASES.map((c, i) => (
         <EvidenceCaseCard key={c.id} caseData={c} defaultOpen={i === 0} />
       ))}
+
+      <div id="engine-lab-section" className={styles.sectionHead}>
+        <div className={styles.sectionTitle}>Falsification, Verdict &amp; Audit</div>
+        <div className={styles.sectionSub}>
+          Stress-test the hypothesis with pure-statistics robustness checks, then issue a rule-based,
+          fully auditable verdict — no LLM in the loop.
+        </div>
+      </div>
+
+      <EngineRunPanel hypothesisQuestion={RESEARCH_QUESTION} onToast={setToast} />
 
       <div style={{ marginTop: 24 }}>
         <ResearchQuestionBar showTemplates={false} />

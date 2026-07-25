@@ -1,59 +1,101 @@
 """
-Pydantic schemas for the Discovery Feed.
-
-ResearchSignalRead — shape of a row from research_signals.
-FeedSignalsPage    — paginated response for GET /feed/signals (list page).
-FeedStats          — the 4 stat cards at the top of the dashboard.
-ScanResult         — response for POST /feed/scan.
+Hospital / Node schemas — the Multi-Node Simulator's node registry, plus
+the richer "Hospital Insights" page schemas (network overview + the
+caller's own hospital profile, stats, achievements, and recent activity).
 """
 
-from datetime import datetime
-from typing import List, Optional
+from typing import Optional, List
 
 from pydantic import BaseModel
 
 
-class ResearchSignalRead(BaseModel):
+class HospitalNode(BaseModel):
     id: str
-    signal_type: str  # 'emerging_syndrome' | 'drug_response' | 'biomarker' | 'research_opportunity'
-    status: str        # 'active' | 'validating' | 'published' | 'archived'
-
-    title: str
-    summary: str
-
-    confidence: float
-
+    name: str
+    city: Optional[str] = None
+    country: Optional[str] = None
     case_count: int = 0
-    patient_count: Optional[int] = None
-    hospital_count: int = 0
-    countries: List[str] = []
-    participating_hospitals: List[str] = []
-    tags: List[str] = []
-
-    evidence_score: Optional[float] = None
-    reproducibility_score: Optional[float] = None
-    hospital_diversity_score: Optional[float] = None
-    data_quality_score: Optional[float] = None
-
-    created_at: datetime
-    updated_at: datetime
 
 
-class FeedSignalsPage(BaseModel):
-    items: List[ResearchSignalRead]
-    total: int
+# ── Hospital Insights page ───────────────────────────────────────────────────
+
+class NetworkOverview(BaseModel):
+    total_hospitals: int = 0
+    verified_hospitals: int = 0
+    total_cases: int = 0
+    total_discoveries: int = 0          # sum of disease + syndrome discoveries, latest metrics
+    total_collaborations: int = 0       # count of collaboration rows network-wide
+    countries_count: int = 0
 
 
-class FeedStats(BaseModel):
-    matched_cases_global: int
-    active_signals: int
-    active_collaborations: int
-    hospital_name: Optional[str] = None
-    hospital_rank: Optional[int] = None
+class LeaderboardEntry(BaseModel):
+    rank: int
+    id: str
+    name: str
+    country: Optional[str] = None
+    discovery_score: float = 0
+    case_count: int = 0
+    is_mine: bool = False
 
 
-class ScanResult(BaseModel):
-    cases_scanned: int
-    clusters_found: int
-    signals_created: int
-    signals_updated: int
+class FootprintEntry(BaseModel):
+    country: str
+    hospital_count: int
+    case_count: int
+    is_mine: bool = False
+
+
+class HospitalMetricsOut(BaseModel):
+    disease_discoveries: int = 0
+    published_collaborations: int = 0
+    emerging_syndrome_identifications: int = 0
+    collaboration_score: float = 0
+    research_impact_score: float = 0
+    validation_score: float = 0
+    recorded_at: Optional[str] = None
+
+
+class NetworkAverages(BaseModel):
+    discovery_score: float = 0
+    case_count: float = 0
+    collaboration_score: float = 0
+    research_impact_score: float = 0
+    validation_score: float = 0
+
+
+class Achievement(BaseModel):
+    key: str
+    label: str
+    description: str
+    icon: str
+    unlocked: bool = False
+    progress_label: Optional[str] = None  # e.g. "3 of 5" for near-miss badges
+
+
+class ActivityItem(BaseModel):
+    type: str            # "case" | "collaboration" | "validation"
+    title: str
+    detail: Optional[str] = None
+    timestamp: str
+
+
+class HospitalProfile(BaseModel):
+    id: str
+    name: str
+    city: Optional[str] = None
+    country: Optional[str] = None
+    verification_status: Optional[str] = None
+    discovery_score: float = 0
+    global_rank: Optional[int] = None
+    case_count: int = 0
+    metrics: HospitalMetricsOut = HospitalMetricsOut()
+    network_avg: NetworkAverages = NetworkAverages()
+    achievements: List[Achievement] = []
+    recent_activity: List[ActivityItem] = []
+
+
+class HospitalInsightsResponse(BaseModel):
+    network: NetworkOverview = NetworkOverview()
+    leaderboard: List[LeaderboardEntry] = []
+    footprint: List[FootprintEntry] = []
+    hospital: Optional[HospitalProfile] = None

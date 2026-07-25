@@ -157,11 +157,11 @@ def search_similar(
         else query_filter
     )
 
-    return client.search(
+    return client.query_points(
         collection_name=settings.QDRANT_COLLECTION_NAME,
-        query_vector=vector,
+        query=vector,
         limit=limit,
         query_filter=effective_filter,
         score_threshold=score_threshold,
         with_payload=True,
-    )
+    ).points

@@ -1,0 +1,41 @@
+{
+  "_comment": "Static config, agreed once and never touched again during the build. Maps free-text `outcome` values from the cases table to one of: favorable | unfavorable | ongoing. Every member reads this file independently — it is not imported as live code. Matching is substring-based (case-insensitive) against the `patterns` lists below; the FIRST matching pattern (checked longest-first) wins, so put more specific phrases before generic ones within a bucket.",
+
+  "favorable": {
+    "patterns": [
+      "recovered",
+      "remission",
+      "improved",
+      "partial response",
+      "resolved",
+      "cured",
+      "responding well"
+    ]
+  },
+  "unfavorable": {
+    "patterns": [
+      "deceased",
+      "death",
+      "progressive disease",
+      "progression",
+      "recurrent",
+      "recurrence",
+      "worsened",
+      "non-responder",
+      "no response"
+    ]
+  },
+  "ongoing": {
+    "patterns": [
+      "stable after cycle",
+      "stable",
+      "under follow-up",
+      "under treatment",
+      "under observation",
+      "monitoring",
+      "pending"
+    ]
+  },
+
+  "_unclassified_policy": "Any outcome string matching none of the patterns above is bucketed as 'unclassified' at runtime (see outcome_mapping.py). Unclassified and 'ongoing' cases are excluded from the binary favorable-vs-unfavorable contingency table used for odds ratio / chi-square / Fisher tests, but are reported in result metadata (n_excluded_ongoing, n_excluded_unclassified) so nobody mistakes a shrunken denominator for a clean one."
+}
