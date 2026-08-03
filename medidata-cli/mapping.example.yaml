@@ -1,0 +1,34 @@
+# mapping.yaml — tailored to your actual schema (doctors/patients/encounters).
+# Put this file in the same directory you run `medidata` commands from.
+#
+# source_table points at medidata_sync_view, NOT encounters directly —
+# the CLI only ever runs a single-table SELECT, and age/sex/country live
+# in `patients`, not `encounters`. Run medidata_sync_view.sql once to
+# create that view (read-only join, no schema changes to your real tables).
+
+source_table: medidata_sync_view
+id_column: id
+watermark_column: updated_at        # matches idx_encounters_updated_at
+doctor_column: attending_doctor_id  # matches doctors.id (the id you pick in `medidata map-doctor`)
+
+field_map:
+  # ── clinical fields — survive into the uploaded case ────────────────
+  age_range:      { source: patient_age,     transform: bucket_age }
+  sex:            { source: sex }
+  country:        { source: country }
+  symptoms:       { source: symptoms,        transform: extract_names }   # JSON [{name, icd_code}, ...] -> just the names
+  medications:    { source: medications,     transform: split_csv }       # JSON ["Rituximab", ...] -> flat list
+  disease:        { source: disease }
+  diagnosis_icd:  { source: diagnosis_icd }
+  outcome:        { source: outcome }
+  admission_date: { source: admission_date,  transform: to_iso_date }
+  discharge_date: { source: discharge_date,  transform: to_iso_date }
+
+  # ── direct identifiers — consumed in-memory by the privacy pipeline
+  #    only (Layer 1 strips these, Layer 2 tokenizes patient_identifier).
+  #    Never included in the payload sent to MediData. ─────────────────
+  patient_identifier: { source: mrn }
+  patient_name:        { source: patient_name }
+  patient_dob:          { source: date_of_birth }
+  patient_phone:        { source: contact_phone }
+  patient_address:      { source: patient_address }

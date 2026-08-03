@@ -1,0 +1,48 @@
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# Supabase
+supabase==2.4.6
+
+# Data validation
+pydantic[email]==2.7.1
+
+# Environment
+python-dotenv==1.0.1
+
+# HTTP client (used by supabase internally)
+httpx==0.27.0
+
+# Auth / JWT utilities (for future protected routes)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ML / embeddings (used in app/ml/)
+numpy==1.26.4
+scikit-learn==1.4.2
+sentence-transformers==2.7.0
+
+# Qdrant vector DB client
+qdrant-client==1.9.1
+
+# Async DB session (SQLAlchemy for Alembic migrations)
+sqlalchemy==2.0.30
+alembic==1.13.1
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+pdfplumber==0.11.0
+python-multipart==0.0.9
+
+# Groq (tool-calling research chat agent)
+groq==1.5.0
+
+# Dataset export (Research > Dataset page — CSV/XLSX download)
+openpyxl==3.1.2
+
+# Testing
+pytest==8.2.0
+pytest-mock==3.14.0
+pandas==2.3.1
+
+scipy
